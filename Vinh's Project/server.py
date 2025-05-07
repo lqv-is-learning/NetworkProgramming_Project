@@ -1,14 +1,17 @@
+# server.py
 import socket
 import threading
 import os
 import hashlib
+from datetime import datetime
 from cryptography.fernet import Fernet
 
 HOST = '0.0.0.0'
 PORT = 12345
 MAX_CLIENTS = 20
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
-# Đọc thông tin người dùng
+# Load user credentials
 def load_users(filename="users.txt"):
     users = {}
     with open(filename, "r") as f:
@@ -22,26 +25,31 @@ user_credentials = load_users()
 clients = {}
 lock = threading.Lock()
 
-# Tải khóa mã hóa
+# Encryption setup
 if not os.path.exists("fernet.key"):
     with open("fernet.key", "wb") as f:
         f.write(Fernet.generate_key())
-
 with open("fernet.key", "rb") as kf:
     fernet = Fernet(kf.read())
+
+def log_message(sender, recipient, content):
+    os.makedirs("history", exist_ok=True)
+    with open(f"history/chat_{sender}_{recipient}.txt", "a") as f:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"[{timestamp}] {sender} -> {recipient}: {content}\n")
 
 def send_to_user(sender, recipient, message):
     with lock:
         if recipient in clients:
             try:
                 clients[recipient].send(f"[{sender}] {message}".encode())
+                log_message(sender, recipient, message)
             except:
                 clients[recipient].close()
                 del clients[recipient]
         else:
             if sender in clients:
                 clients[sender].send(f"[Server] User '{recipient}' not online.".encode())
-
 def handle_client(conn, addr):
     username = None
     try:
@@ -92,7 +100,7 @@ def handle_client(conn, addr):
                     with open(os.path.join("uploads", filename + ".enc"), "wb") as f:
                         f.write(enc_data)
 
-                    # Giải mã và lưu sang thư mục nhận
+                    # Giải mã và lưu
                     dec_data = fernet.decrypt(enc_data)
                     actual_sha = hashlib.sha256(dec_data).hexdigest()
                     match = "OK" if actual_sha == checksum else "MISMATCH"
@@ -103,13 +111,14 @@ def handle_client(conn, addr):
                     with open(save_path, "wb") as f:
                         f.write(dec_data)
 
+                    # Gửi thông báo gọn và lệnh PREVIEW
                     if to_user in clients:
                         clients[to_user].send(
-                            f"[File] You received '{filename}' from {username}\nSHA256: {actual_sha} ({match})".encode()
+                            f"[File] {username} sent '{filename}'\nPREVIEW:{filename}".encode()
                         )
 
                     print(f"[Server] File from {username} to {to_user} saved to {save_path} ({match})")
-                    conn.send(f"[Server] File '{filename}' sent to '{to_user}' ({match})".encode())
+                    conn.send(f"[Server] File '{filename}' sent to '{to_user}'".encode())
 
                 except Exception as e:
                     print(f"[Error] Handling file: {e}")
