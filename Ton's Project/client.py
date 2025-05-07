@@ -1,14 +1,11 @@
-# ==============================
 # client.py
-# ==============================
 import socket
 import threading
 import os
 import hashlib
-import mimetypes
 from media_preview import open_media
 
-HOST = '127.0.0.1'
+HOST = '192.168.29.200'
 PORT = 5000
 RECEIVED_FOLDER = 'client_downloads'
 os.makedirs(RECEIVED_FOLDER, exist_ok=True)
@@ -29,10 +26,18 @@ def recv_line(sock):
         line += char
     return line.decode()
 
+def clear_cache():
+    for f in os.listdir(RECEIVED_FOLDER):
+        try:
+            os.remove(os.path.join(RECEIVED_FOLDER, f))
+        except:
+            pass
+    print("[*] Cache cleared.")
+
 def receiver(sock):
     while True:
         try:
-            header = recv_line(sock)  # safely read the header
+            header = recv_line(sock)
             if not header:
                 break
 
@@ -41,7 +46,7 @@ def receiver(sock):
                 filesize = int(filesize)
                 filepath = os.path.join(RECEIVED_FOLDER, filename)
 
-                with open(filepath, 'wb') as f:  # 'wb' to write binary!
+                with open(filepath, 'wb') as f:
                     remaining = filesize
                     while remaining > 0:
                         chunk = sock.recv(min(1024, remaining))
@@ -50,11 +55,21 @@ def receiver(sock):
                         f.write(chunk)
                         remaining -= len(chunk)
 
-                print(f"\n[+] File '{filename}' downloaded to {filepath}\n> ", end='')
+                print(f"\n[+] File '{filename}' downloaded to {filepath}")
                 open_media(filepath)
 
+            elif header.startswith("TEXT|"):
+                print(f"\n{header[5:]}")
+            elif header.startswith("NOTIFY|"):
+                print(f"\n🔔 {header[7:]}")
+            elif header.startswith("ERROR|"):
+                print(f"\n[!] {header[6:]}")
+            elif header.startswith("INFO|") or header.startswith("OK|"):
+                print(f"\n{header[header.find('|') + 1:]}")
             else:
-                print(f"\n{header}\n> ", end='')
+                print(f"\n[?] Unknown message: {header}")
+
+            print("> ", end='')
 
         except Exception as e:
             print(f"\n[!] Receiver error: {e}")
@@ -64,28 +79,28 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.connect((HOST, PORT))
     username = input("Username: ").strip()
     password = input("Password: ").strip()
-    s.send(f"{username}|{password}".encode())
-    print(s.recv(1024).decode())
+    s.send(f"{username}|{password}\n".encode())
+    print(recv_line(s))
 
     threading.Thread(target=receiver, args=(s,), daemon=True).start()
 
     while True:
-        print("\n1. Send Text\n2. Send File\n3. Request File\n4. Exit")
+        print("\n1. Send Text\n2. Send File\n3. Request File\n4. Clear Cache\n5. Exit")
         choice = input("> ").strip()
 
         if choice == '1':
             msg = input("Message: ")
-            s.send(f"TEXT|{msg}".encode())
+            s.send(f"TEXT|{msg}\n".encode())
 
         elif choice == '2':
-            filepath = input("Enter absolute file path: ")
+            filepath = input("Enter absolute file path: ").strip()
             if not os.path.isabs(filepath) or not os.path.isfile(filepath):
                 print("Invalid file path.")
                 continue
             filename = os.path.basename(filepath)
             filesize = os.path.getsize(filepath)
             filehash = sha256_checksum(filepath)
-            s.send(f"FILE|{filename}|{filesize}|{filehash}".encode())
+            s.send(f"FILE|{filename}|{filesize}|{filehash}\n".encode())
             with open(filepath, 'rb') as f:
                 while True:
                     data = f.read(1024)
@@ -95,9 +110,12 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
         elif choice == '3':
             filename = input("Enter filename to request: ")
-            s.send(f"GET_FILE|{filename}".encode())
+            s.send(f"GET_FILE|{filename}\n".encode())
 
         elif choice == '4':
+            clear_cache()
+
+        elif choice == '5':
             print("Exiting...")
             break
 
