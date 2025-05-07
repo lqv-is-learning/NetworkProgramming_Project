@@ -5,7 +5,7 @@ import os
 import hashlib
 from media_preview import open_media
 
-HOST = '192.168.29.200'
+HOST = '117.5.210.143'
 PORT = 5000
 RECEIVED_FOLDER = 'client_downloads'
 os.makedirs(RECEIVED_FOLDER, exist_ok=True)

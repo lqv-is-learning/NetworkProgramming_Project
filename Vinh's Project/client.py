@@ -1,6 +1,4 @@
-# client.py
 import socket
-import hashlib
 import threading
 import os
 import webbrowser
@@ -9,19 +7,6 @@ from pathlib import Path
 SERVER_IP = '127.0.0.1'
 PORT = 12345
 
-DOWNLOADS = Path("downloads")
-DOWNLOADS.mkdir(exist_ok=True)
-
-def sha256_of_file(path):
-    try:
-        with open(path, 'rb') as f:
-            h = hashlib.sha256()
-            while chunk := f.read(4096):
-                h.update(chunk)
-            return h.hexdigest()
-    except FileNotFoundError:
-        return None
-
 def receive_messages(sock):
     while True:
         try:
@@ -29,35 +14,28 @@ def receive_messages(sock):
             if not data:
                 print("\n[System] Server disconnected.")
                 os._exit(0)
-            msg = data.decode()
+            msg = data.decode(errors="ignore")
 
             print("\n" + msg + "\n> ", end="")
 
-            # Media preview
             if "PREVIEW:" in msg:
                 filename = msg.split("PREVIEW:")[1].strip()
-                preview_path = DOWNLOADS / filename
+                preview_path = Path(filename)
                 if preview_path.exists():
                     ext = preview_path.suffix.lower()
-                    if ext in ['.jpg', '.png', '.gif', '.pdf']:
+                    if ext in ['.jpg', '.jpeg', '.png', '.gif', '.pdf']:
                         webbrowser.open(preview_path.absolute().as_uri())
-
         except Exception as e:
             print(f"[Error] {e}")
             break
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect((SERVER_IP, PORT))
-print("Connecting to server...")
-
-# Login
 print(s.recv(1024).decode(), end="")
-username = input()
-s.send(username.encode())
+s.send(input().strip().encode())
 
 print(s.recv(1024).decode(), end="")
-password = input()
-s.send(password.encode())
+s.send(input().strip().encode())
 
 response = s.recv(1024).decode()
 print(response)
@@ -71,7 +49,7 @@ chat_with = None
 
 while True:
     msg = input("> ").strip()
-    if msg.lower() == 'exit':
+    if msg.lower() == "exit":
         break
     elif msg.startswith("/chat "):
         chat_with = msg.split(" ", 1)[1]
@@ -91,8 +69,8 @@ while True:
                 print("[System] File not found.")
                 continue
 
-            file_size = os.path.getsize(filepath)
-            if file_size > 5 * 1024 * 1024:
+            filesize = os.path.getsize(filepath)
+            if filesize > 5 * 1024 * 1024:
                 print("[System] File too large. Max 5MB.")
                 continue
 
@@ -100,8 +78,7 @@ while True:
             with open(filepath, "rb") as f:
                 file_data = f.read()
 
-            sha256 = hashlib.sha256(file_data).hexdigest()
-            header = f"FILE:{recipient}:{filename}:{sha256}"
+            header = f"FILE:{recipient}:{filename}:{len(file_data)}"
             s.send(header.encode())
             s.sendall(file_data)
 

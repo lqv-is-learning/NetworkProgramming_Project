@@ -1,19 +1,24 @@
-# server.py
 import socket
 import threading
 import os
-import hashlib
 from datetime import datetime
-from cryptography.fernet import Fernet
 
 HOST = '0.0.0.0'
 PORT = 12345
 MAX_CLIENTS = 20
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 
-# Load user credentials
+def log_message(sender, recipient, message):
+    os.makedirs("history", exist_ok=True)
+    filename = f"history/chat_{sender}_{recipient}.txt"
+    with open(filename, "a") as f:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"[{timestamp}] {sender} -> {recipient}: {message}\n")
+
 def load_users(filename="users.txt"):
     users = {}
+    if not os.path.exists(filename):
+        return users
     with open(filename, "r") as f:
         for line in f:
             if "," in line:
@@ -21,58 +26,39 @@ def load_users(filename="users.txt"):
                 users[username] = password
     return users
 
-user_credentials = load_users()
 clients = {}
+user_credentials = load_users()
 lock = threading.Lock()
-
-# Encryption setup
-if not os.path.exists("fernet.key"):
-    with open("fernet.key", "wb") as f:
-        f.write(Fernet.generate_key())
-with open("fernet.key", "rb") as kf:
-    fernet = Fernet(kf.read())
-
-def log_message(sender, recipient, content):
-    os.makedirs("history", exist_ok=True)
-    with open(f"history/chat_{sender}_{recipient}.txt", "a") as f:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"[{timestamp}] {sender} -> {recipient}: {content}\n")
 
 def send_to_user(sender, recipient, message):
     with lock:
         if recipient in clients:
-            try:
-                clients[recipient].send(f"[{sender}] {message}".encode())
-                log_message(sender, recipient, message)
-            except:
-                clients[recipient].close()
-                del clients[recipient]
+            clients[recipient].send(f"[{sender}] {message}".encode())
         else:
-            if sender in clients:
-                clients[sender].send(f"[Server] User '{recipient}' not online.".encode())
+            clients[sender].send(f"[Server] User '{recipient}' not online.".encode())
+
 def handle_client(conn, addr):
     username = None
     try:
-        conn.send("Username: ".encode())
+        conn.send(b"Username: ")
         username = conn.recv(1024).decode().strip()
-
-        conn.send("Password: ".encode())
+        conn.send(b"Password: ")
         password = conn.recv(1024).decode().strip()
 
         if username not in user_credentials or user_credentials[username] != password:
-            conn.send("Login failed.".encode())
+            conn.send(b"Login failed.")
             conn.close()
             return
 
         with lock:
             if username in clients:
-                conn.send("User already logged in.".encode())
+                conn.send(b"User already logged in.")
                 conn.close()
                 return
             clients[username] = conn
 
-        conn.send(f"Login successful! Welcome, {username}.".encode())
-        print(f"[+] {username} logged in from {addr}")
+        conn.send(f"Login successful! Welcome, {username}".encode())
+        print(f"[+] {username} connected from {addr}")
 
         while True:
             data = conn.recv(4096)
@@ -81,59 +67,33 @@ def handle_client(conn, addr):
             msg = data.decode(errors="ignore").strip()
 
             if msg.startswith("FILE:"):
-                try:
-                    _, to_user, filename, checksum = msg.split(":", 3)
+                _, to_user, filename, filesize = msg.split(":", 3)
+                filesize = int(filesize)
+                file_data = b""
+                while len(file_data) < filesize:
+                    chunk = conn.recv(min(4096, filesize - len(file_data)))
+                    if not chunk:
+                        break
+                    file_data += chunk
 
-                    # Nhận toàn bộ file
-                    file_data = b""
-                    while True:
-                        chunk = conn.recv(4096)
-                        if not chunk:
-                            break
-                        file_data += chunk
-                        if len(chunk) < 4096:
-                            break
+                with open(filename, "wb") as f:
+                    f.write(file_data)
 
-                    # Mã hóa và lưu
-                    os.makedirs("uploads", exist_ok=True)
-                    enc_data = fernet.encrypt(file_data)
-                    with open(os.path.join("uploads", filename + ".enc"), "wb") as f:
-                        f.write(enc_data)
+                if to_user in clients:
+                    clients[to_user].send(f"[File] {username} sent '{filename}'\nPREVIEW:{filename}".encode())
 
-                    # Giải mã và lưu
-                    dec_data = fernet.decrypt(enc_data)
-                    actual_sha = hashlib.sha256(dec_data).hexdigest()
-                    match = "OK" if actual_sha == checksum else "MISMATCH"
-
-                    folder = f"receive_to_{to_user}"
-                    os.makedirs(folder, exist_ok=True)
-                    save_path = os.path.join(folder, filename)
-                    with open(save_path, "wb") as f:
-                        f.write(dec_data)
-
-                    # Gửi thông báo gọn và lệnh PREVIEW
-                    if to_user in clients:
-                        clients[to_user].send(
-                            f"[File] {username} sent '{filename}'\nPREVIEW:{filename}".encode()
-                        )
-
-                    print(f"[Server] File from {username} to {to_user} saved to {save_path} ({match})")
-                    conn.send(f"[Server] File '{filename}' sent to '{to_user}'".encode())
-
-                except Exception as e:
-                    print(f"[Error] Handling file: {e}")
-                    conn.send(f"[Server] Error handling file: {e}".encode())
+                print(f"[Server] {username} sent file '{filename}' to {to_user}")
+                conn.send(f"[Server] File '{filename}' sent to '{to_user}'.".encode())
 
             elif msg.startswith("@"):
                 try:
                     to_user, content = msg[1:].split(" ", 1)
                     send_to_user(username, to_user, content)
-                except ValueError:
-                    conn.send("[Server] Use: @username message".encode())
-
+                    log_message(username, to_user, content)
+                except:
+                    conn.send(b"[Server] Use: @username message")
             else:
-                conn.send("[Server] Invalid message format.".encode())
-
+                conn.send(b"[Server] Invalid message format.")
     except Exception as e:
         print(f"[!] Error: {e}")
     finally:
@@ -148,7 +108,6 @@ def main():
     server.bind((HOST, PORT))
     server.listen(MAX_CLIENTS)
     print(f"[Server] Listening on port {PORT}...")
-
     while True:
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
